@@ -247,64 +247,42 @@ bool MergableRoadDetector::ConnectAgain(const NodeID intersection_node,
 {
     // compute the set of all intersection_nodes along the way of an edge, until it reaches a
     // location with the same name repeatet at least three times
-    const auto findMeetUpCandidate = [&](const NameID searched_name, const MergableRoadData &road) {
-        auto current_node = intersection_node;
-        auto current_eid = road.eid;
+    const auto left_connection =
+        intersection_generator.SkipDegreeTwoNodes(intersection_node, lhs.eid);
+    const auto right_connection =
+        intersection_generator.SkipDegreeTwoNodes(intersection_node, rhs.eid);
 
-        const auto has_requested_name = makeCheckRoadForName(searched_name, node_based_graph);
-        // limit our search to at most 10 intersections. This is intended to ignore connections
-        // that
-        // are really far away
-        for (std::size_t hop_count = 0; hop_count < 10; ++hop_count)
-        {
-            const auto next_intersection =
-                intersection_generator.GetConnectedRoads(current_node, current_eid);
-            const auto count = std::count_if(
-                next_intersection.begin() + 1, next_intersection.end(), has_requested_name);
+    const auto left_candidate = node_based_graph.GetTarget(left_connection.second);
+    const auto right_candidate = node_based_graph.GetTarget(right_connection.second);
 
-            if (count >= 2)
-                return node_based_graph.GetTarget(current_eid);
-            else if (count == 0)
-            {
-                return SPECIAL_NODEID;
-            }
-            else
-            {
-                current_node = node_based_graph.GetTarget(current_eid);
-                // skip over bridges/similar
-                if (next_intersection.size() == 2)
-                    current_eid = next_intersection[1].eid;
-                else
-                {
-                    const auto next_turn = std::find_if(
-                        next_intersection.begin() + 1, next_intersection.end(), has_requested_name);
-
-                    if (angularDeviation(next_turn->angle, 180) > NARROW_TURN_ANGLE)
-                        return current_node;
-                    BOOST_ASSERT(next_turn != next_intersection.end());
-                    current_eid = next_turn->eid;
-                }
-            }
-        }
-
-        return SPECIAL_NODEID;
-    };
-
-    const auto left_candidate =
-        findMeetUpCandidate(node_based_graph.GetEdgeData(lhs.eid).name_id, lhs);
-    const auto right_candidate =
-        findMeetUpCandidate(node_based_graph.GetEdgeData(rhs.eid).name_id, rhs);
-
-    const auto candidate_is_valid = left_candidate == right_candidate &&
-                                    left_candidate != SPECIAL_NODEID &&
-                                    left_candidate != intersection_node;
+    const auto candidate_is_valid =
+        left_candidate == right_candidate && left_candidate != intersection_node;
 
     if (!candidate_is_valid)
         return false;
 
+    // check if all entries at the destination or at the source are the same
+    const auto all_same_name_and_degree_three = [this](const NodeID nid) {
+        // check if the intersection found has degree three
+        if (node_based_graph.GetOutDegree(nid) != 3)
+            return false;
+
+        // check if all items share a name
+        const auto range = node_based_graph.GetAdjacentEdgeRange(nid);
+        const auto required_name_id = node_based_graph.GetEdgeData(range.front()).name_id;
+        return range.end() !=
+               std::find_if(
+                   range.begin(), range.end(), [this, required_name_id](const auto edge_id) {
+                       return node_based_graph.GetEdgeData(edge_id).name_id == required_name_id;
+                   });
+    };
+
+    if (all_same_name_and_degree_three(intersection_node) ||
+        all_same_name_and_degree_three(left_candidate))
+        return true;
+
     const auto distance_between_candidates = util::coordinate_calculation::haversineDistance(
         node_coordinates[intersection_node], node_coordinates[left_candidate]);
-    std::cout << "Found Distance: " << distance_between_candidates << std::endl;
 
     return distance_between_candidates < 15;
 }
@@ -312,37 +290,28 @@ bool MergableRoadDetector::ConnectAgain(const NodeID intersection_node,
 bool MergableRoadDetector::IsLinkRoad(const NodeID intersection_node,
                                       const MergableRoadData &road) const
 {
-    // selection data to the right and left
-    IntersectionFinderAccumulator accumulator(2, intersection_generator);
-
-    // Standard following the straightmost road
-    // Since both items have the same id, we can `select` based on any setup
-    SelectStraightmostRoadByNameAndOnlyChoice selector(
-        node_based_graph.GetEdgeData(road.eid).name_id, false);
-
-    NodeBasedGraphWalker graph_walker(node_based_graph, intersection_generator);
-    graph_walker.TraverseRoad(intersection_node, road.eid, accumulator, selector);
-
-    const auto &next_intersection_along_road = accumulator.intersection;
+    const auto next_intersection_parameters =
+        intersection_generator.SkipDegreeTwoNodes(intersection_node, road.eid);
+    const auto next_intersection_along_road = intersection_generator.GetConnectedRoads(
+        next_intersection_parameters.first, next_intersection_parameters.second);
     const auto extract_name = [this](const MergableRoadData &road) {
         return node_based_graph.GetEdgeData(road.eid).name_id;
     };
 
     const auto requested_name = extract_name(road);
-    const auto next_road_along_path = accumulator.intersection.findClosestTurn(
-        STRAIGHT_ANGLE, [requested_name, extract_name](const MergableRoadData &compare_road) {
-            return requested_name != extract_name(compare_road);
-        });
+    const auto next_road_along_path = next_intersection_along_road.findClosestTurn(
+        STRAIGHT_ANGLE, makeCheckRoadForName(requested_name, node_based_graph));
 
     // we need to have a continuing road to successfully detect a link road
-    if (next_road_along_path == accumulator.intersection.end())
+    if (next_road_along_path == next_intersection_along_road.end())
         return false;
 
-    const auto opposite_of_next_road_along_path = next_intersection_along_road.findClosestBearing(
-        util::restrictAngleToValidRange(next_road_along_path->bearing + 180));
+    const auto opposite_of_next_road_along_path = next_intersection_along_road.findClosestTurn(
+        util::restrictAngleToValidRange(next_road_along_path->angle + 180));
 
     // we cannot be looking at the same road we came from
-    if (node_based_graph.GetTarget(opposite_of_next_road_along_path->eid) == accumulator.nid)
+    if (node_based_graph.GetTarget(opposite_of_next_road_along_path->eid) ==
+        next_intersection_parameters.first)
         return false;
 
     // near straight road that continues

@@ -149,6 +149,13 @@ template <typename Self> struct EnableShapeOps
         return initial;
     };
 
+    // find the maximum value based on a conversion operator and a predefined initial value
+    template <typename UnaryPredicate> auto count(const UnaryPredicate detector) const
+    {
+        BOOST_ASSERT(!self()->empty());
+        return std::count_if( self()->begin(),self()->end(),detector);
+    };
+
   private:
     auto self() { return static_cast<Self *>(this); }
     auto self() const { return static_cast<const Self *>(this); }
@@ -193,26 +200,6 @@ template <typename Self> struct EnableIntersectionOps
             return false;
 
         return true;
-    }
-
-    // Given all possible turns which is the highest connected number of lanes per turn.
-    // This value is used for example during generation of intersections.
-    auto getHighestConnectedLaneCount(const util::NodeBasedDynamicGraph &graph) const
-    {
-        const std::function<std::uint8_t(const ConnectedRoad &)> to_lane_count =
-            [&](const ConnectedRoad &road) {
-                return graph.GetEdgeData(road.eid).road_classification.GetNumberOfLanes();
-            };
-
-        std::uint8_t max_lanes = 0;
-        const auto extract_maximal_value = [&max_lanes](std::uint8_t value) {
-            max_lanes = std::max(max_lanes, value);
-            return false;
-        };
-
-        const auto view = *self() | boost::adaptors::transformed(to_lane_count);
-        boost::range::find_if(view, extract_maximal_value);
-        return max_lanes;
     }
 
     // Returns the UTurn road we took to arrive at this intersection.
