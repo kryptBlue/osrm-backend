@@ -97,6 +97,10 @@ bool MergableRoadDetector::RoadDataIsCompatible(const util::NodeBasedEdgeData &l
     if (lhs_edge_data.travel_mode != rhs_edge_data.travel_mode)
         return false;
 
+    // since merging is quite severe, we ask for identical names, not just similar names
+    if (lhs_edge_data.name_id != rhs_edge_data.name_id)
+        return false;
+
     return lhs_edge_data.road_classification == rhs_edge_data.road_classification;
 }
 
@@ -302,17 +306,38 @@ bool MergableRoadDetector::IsLinkRoad(const NodeID intersection_node,
     const auto next_road_along_path = next_intersection_along_road.findClosestTurn(
         STRAIGHT_ANGLE, makeCheckRoadForName(requested_name, node_based_graph));
 
+    std::cout << "Checking for continuing road" << std::endl;
+
     // we need to have a continuing road to successfully detect a link road
     if (next_road_along_path == next_intersection_along_road.end())
         return false;
 
+    std::cout << "Checking for target" << std::endl;
+
+    std::cout << "[intersection]" << std::endl;
+    for (auto road : next_intersection_along_road)
+        std::cout << "\t" << road.eid << " " << road.angle << " " << road.bearing << " "
+                  << node_based_graph.GetEdgeData(road.eid).name_id << std::endl;
+
+    std::cout << "Next road: " << next_road_along_path->eid << std::endl;
+
     const auto opposite_of_next_road_along_path = next_intersection_along_road.findClosestTurn(
         util::restrictAngleToValidRange(next_road_along_path->angle + 180));
+
+    std::cout << "Opposite: " << opposite_of_next_road_along_path->eid << std::endl;
 
     // we cannot be looking at the same road we came from
     if (node_based_graph.GetTarget(opposite_of_next_road_along_path->eid) ==
         next_intersection_parameters.first)
         return false;
+
+    std::cout << "Angle Between: " << angularDeviation(opposite_of_next_road_along_path->angle,
+                                                       next_road_along_path->angle)
+              << " Compatible: "
+              << RoadDataIsCompatible(
+                     node_based_graph.GetEdgeData(next_road_along_path->eid),
+                     node_based_graph.GetEdgeData(opposite_of_next_road_along_path->eid))
+              << std::endl;
 
     // near straight road that continues
     return angularDeviation(opposite_of_next_road_along_path->angle, next_road_along_path->angle) >=
