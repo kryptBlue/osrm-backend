@@ -41,7 +41,7 @@ bool isOutermostForkCandidate(const ConnectedRoad &road1, const ConnectedRoad &r
     }
     return false;
 }
-// @CHAU_TODO get rid of
+
 bool isEndOfRoad(const ConnectedRoad &,
                  const ConnectedRoad &possible_right_turn,
                  const ConnectedRoad &possible_left_turn)
@@ -178,49 +178,28 @@ bool TurnHandler::isObviousOfTwo(const EdgeID via_edge,
                                  const ConnectedRoad &road,
                                  const ConnectedRoad &other) const
 {
-    const auto &in_data = node_based_graph.GetEdgeData(via_edge);
-    const auto &first_data = node_based_graph.GetEdgeData(road.eid);
-    const auto &second_data = node_based_graph.GetEdgeData(other.eid);
-    const auto &first_classification = first_data.road_classification;
-    const auto &second_classification = second_data.road_classification;
-    const bool is_ramp = first_classification.IsRampClass();
+    const auto &via_data = node_based_graph.GetEdgeData(via_edge);
+    const auto &road_data = node_based_graph.GetEdgeData(road.eid);
+    const auto &other_data = node_based_graph.GetEdgeData(other.eid);
+    const auto &via_classification = via_data.road_classification;
+    const auto &road_classification = road_data.road_classification;
+    const auto &other_classification = other_data.road_classification;
 
-    // check whether one of the roads is obvious just by its class
-    // @CHAU_TODO consolidate with `obviousByRoadClass()` in extractor/guidance/toolkit.hpp
-    const bool is_obvious_by_road_class =
-        (!is_ramp &&
-         (2 * first_classification.GetPriority() < second_classification.GetPriority()) &&
-         in_data.road_classification == first_classification) ||
-        (!first_classification.IsLowPriorityRoadClass() &&
-         second_classification.IsLowPriorityRoadClass());
-    if (is_obvious_by_road_class)
+    // if one of the given roads is obvious by class, obviousness is trivial
+    if (obviousByRoadClass(via_classification, road_classification, other_classification))
     {
         return true;
     }
-
-    // @CHAU_TODO consolidate with `obviousByRoadClass()` in extractor/guidance/toolkit.hpp
-    const bool other_is_obvious_by_road_class =
-        (!second_classification.IsRampClass() &&
-         (2 * second_classification.GetPriority() < first_classification.GetPriority()) &&
-         in_data.road_classification == second_classification) ||
-        (!second_classification.IsLowPriorityRoadClass() &&
-         first_classification.IsLowPriorityRoadClass());
-
-    if (other_is_obvious_by_road_class)
+    else if (obviousByRoadClass(via_classification, other_classification, road_classification))
     {
         return false;
     }
 
     const bool turn_is_perfectly_straight =
         angularDeviation(road.angle, STRAIGHT_ANGLE) < std::numeric_limits<double>::epsilon();
-
-    const auto &road_data = node_based_graph.GetEdgeData(road.eid);
-
     const auto same_name = !util::guidance::requiresNameAnnounced(
-        in_data.name_id, road_data.name_id, name_table, street_name_suffix_table);
-
-    if (turn_is_perfectly_straight && in_data.name_id != EMPTY_NAMEID &&
-        road_data.name_id != EMPTY_NAMEID && same_name)
+        via_data.name_id, road_data.name_id, name_table, street_name_suffix_table);
+    if (turn_is_perfectly_straight && via_data.name_id != EMPTY_NAMEID && same_name)
     {
         return true;
     }
@@ -235,22 +214,15 @@ bool TurnHandler::isObviousOfTwo(const EdgeID via_edge,
     return is_much_narrower_than_other;
 }
 
-bool TurnHandler::hasObvious(const EdgeID &via_edge,
-                             const Intersection &intersection,
-                             const Fork fork) const
+bool TurnHandler::hasObvious(const EdgeID &via_edge, const Fork fork) const
 {
-    // @CHAU_TODO: refactor this in separate task
-    if (fork.size == 2)
+    for (auto road = fork.right; road < fork.left; ++road)
     {
-        return isObviousOfTwo(via_edge, *fork.left, *fork.right) ||
-               isObviousOfTwo(via_edge, *fork.right, *fork.left);
-    }
-    else if (fork.size == 3)
-    {
-        return isObviousOfTwo(via_edge, *(fork.right + 1), *fork.right) ||
-               isObviousOfTwo(via_edge, *fork.right, *(fork.right + 1)) ||
-               isObviousOfTwo(via_edge, *fork.left, *(fork.right + 1)) ||
-               isObviousOfTwo(via_edge, *(fork.right + 1), *fork.left);
+        if (isObviousOfTwo(via_edge, *road, *(road + 1)) ||
+            isObviousOfTwo(via_edge, *(road + 1), *road))
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -259,6 +231,7 @@ bool TurnHandler::hasObvious(const EdgeID &via_edge,
 // with `intersection` as described as in #IntersectionExplanation@intersection_handler.hpp
 Intersection TurnHandler::handleThreeWayTurn(const EdgeID via_edge, Intersection intersection) const
 {
+    BOOST_ASSERT(intersection.size() == 3);
     const auto obvious_index = findObviousTurn(via_edge, intersection);
     BOOST_ASSERT(intersection[0].angle < 0.001);
     /* Two nearly straight turns -> FORK
@@ -271,9 +244,7 @@ Intersection TurnHandler::handleThreeWayTurn(const EdgeID via_edge, Intersection
 
     auto fork = findFork(via_edge, intersection);
 
-    // @CHAU_TODO refactor such that findFork returns a fork that does not need to be checked again
-    if (fork && intersection.begin() < fork->right && fork->right < fork->left &&
-        obvious_index == 0)
+    if (fork && obvious_index == 0)
     {
         assignFork(via_edge, *fork->left, *fork->right);
     }
@@ -344,20 +315,10 @@ Intersection TurnHandler::handleThreeWayTurn(const EdgeID via_edge, Intersection
 
 Intersection TurnHandler::handleComplexTurn(const EdgeID via_edge, Intersection intersection) const
 {
-    // @CHAU_TODO check whether obvious check here and obvious check in findFork are redundant
     const std::size_t obvious_index = findObviousTurn(via_edge, intersection);
     const auto fork = findFork(via_edge, intersection);
-    std::size_t straightmost_turn = 0;
-    double straightmost_deviation = 180;
-    for (std::size_t i = 0; i < intersection.size(); ++i)
-    {
-        const double deviation = angularDeviation(intersection[i].angle, STRAIGHT_ANGLE);
-        if (deviation < straightmost_deviation)
-        {
-            straightmost_deviation = deviation;
-            straightmost_turn = i;
-        }
-    }
+
+    const auto straightmost = findClosestToStraight(intersection);
 
     // check whether the obvious choice is actually a through street
     if (obvious_index != 0)
@@ -372,7 +333,7 @@ Intersection TurnHandler::handleComplexTurn(const EdgeID via_edge, Intersection 
         intersection = assignLeftTurns(via_edge, std::move(intersection), obvious_index + 1);
         intersection = assignRightTurns(via_edge, std::move(intersection), obvious_index);
     }
-    else if (fork && fork->size <= 3) // found fork
+    else if (fork) // found fork
     {
         if (fork->size == 2)
         {
@@ -381,7 +342,9 @@ Intersection TurnHandler::handleComplexTurn(const EdgeID via_edge, Intersection 
             const auto right_classification =
                 node_based_graph.GetEdgeData((*fork->right).eid).road_classification;
             if (canBeSeenAsFork(left_classification, right_classification))
+            {
                 assignFork(via_edge, *fork->left, *fork->right);
+            }
             else if (left_classification.GetPriority() > right_classification.GetPriority())
             {
                 (*fork->right).instruction =
@@ -412,24 +375,24 @@ Intersection TurnHandler::handleComplexTurn(const EdgeID via_edge, Intersection 
         intersection = assignLeftTurns(via_edge, std::move(intersection), left_index + 1);
         intersection = assignRightTurns(via_edge, std::move(intersection), right_index);
     }
-    else if (straightmost_deviation < FUZZY_ANGLE_DIFFERENCE &&
-             !intersection[straightmost_turn].entry_allowed)
+    else if (straightmost.deviation_from_straight < FUZZY_ANGLE_DIFFERENCE &&
+             !intersection[straightmost.id].entry_allowed)
     {
         // invalid straight turn
-        intersection = assignLeftTurns(via_edge, std::move(intersection), straightmost_turn + 1);
-        intersection = assignRightTurns(via_edge, std::move(intersection), straightmost_turn);
+        intersection = assignLeftTurns(via_edge, std::move(intersection), straightmost.id + 1);
+        intersection = assignRightTurns(via_edge, std::move(intersection), straightmost.id);
     }
     // no straight turn
-    else if (intersection[straightmost_turn].angle > 180)
+    else if (intersection[straightmost.id].angle > 180)
     {
         // at most three turns on either side
-        intersection = assignLeftTurns(via_edge, std::move(intersection), straightmost_turn);
-        intersection = assignRightTurns(via_edge, std::move(intersection), straightmost_turn);
+        intersection = assignLeftTurns(via_edge, std::move(intersection), straightmost.id);
+        intersection = assignRightTurns(via_edge, std::move(intersection), straightmost.id);
     }
-    else if (intersection[straightmost_turn].angle < 180)
+    else if (intersection[straightmost.id].angle < 180)
     {
-        intersection = assignLeftTurns(via_edge, std::move(intersection), straightmost_turn + 1);
-        intersection = assignRightTurns(via_edge, std::move(intersection), straightmost_turn + 1);
+        intersection = assignLeftTurns(via_edge, std::move(intersection), straightmost.id + 1);
+        intersection = assignRightTurns(via_edge, std::move(intersection), straightmost.id + 1);
     }
     else
     {
@@ -658,7 +621,6 @@ bool TurnHandler::isCompatibleByRoadClass(const Intersection &intersection, cons
 {
     const auto via_class = node_based_graph.GetEdgeData(intersection[0].eid).road_classification;
 
-    // @CHAU_TODO check whether this makes sense
     // if any of the considered roads is a link road, it cannot be a fork
     // except if rightmost fork candidate is also a link road
     const auto is_right_link_class =
@@ -673,11 +635,12 @@ bool TurnHandler::isCompatibleByRoadClass(const Intersection &intersection, cons
 
     return std::all_of(fork.right, fork.left + 1, [&](ConnectedRoad &base) {
         const auto base_class = node_based_graph.GetEdgeData(base.eid).road_classification;
-        // compatible if no turn is obvious by RoadClass
+        // check that there is no turn obvious == check that all turns are non-onvious
         return std::all_of(fork.right, fork.left + 1, [&](ConnectedRoad &compare) {
             const auto compare_class =
                 node_based_graph.GetEdgeData(compare.eid).road_classification;
-            return !(obviousByRoadClass(via_class, base_class, compare_class)) || compare.eid==base.eid;
+            return !(obviousByRoadClass(via_class, base_class, compare_class)) ||
+                   compare.eid == base.eid;
         });
     });
 }
@@ -690,8 +653,6 @@ boost::optional<TurnHandler::Fork> TurnHandler::findFork(const EdgeID via_edge,
     const auto fork = findLeftAndRightmostForkCandidates(intersection);
     if (fork)
     {
-        const auto right = fork->right;
-        const auto left = fork->left;
         // makes sure that the fork is isolated from other neighbouring streets on the left and
         // right side
         const auto next =
@@ -703,7 +664,7 @@ boost::optional<TurnHandler::Fork> TurnHandler::findFork(const EdgeID via_edge,
 
         // check whether there is an obvious turn to take; forks are never obvious - if there is an
         // obvious turn, it's not a fork
-        const bool has_obvious = hasObvious(via_edge, intersection, *fork);
+        const bool has_obvious = hasObvious(via_edge, *fork);
 
         // A fork can only happen between edges of similar types where none of the ones is obvious
         const bool has_compatible_classes = isCompatibleByRoadClass(intersection, *fork);

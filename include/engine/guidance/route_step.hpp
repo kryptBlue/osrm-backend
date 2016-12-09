@@ -29,7 +29,26 @@ namespace guidance
 // Departure: s --> a --> b. Represents the segment s,a with location being s.
 // Arrive: a --> b --> t. The segment (b,t) is already covered by the previous segment.
 
-// A representation of intermediate intersections
+// A representation of intermediate intersections:
+// An intersection is an ordered list of connected roads ordered from from sharp right
+// counter-clockwise to sharp left where `intersection[0]` is always a u-turn
+//
+//                                           |
+//                                           |
+//                                     (intersec[3])
+//                                           |
+//                                           |
+//                                           |
+//  nid ---(via_eid/intersec[0])--- nbg.GetTarget(via)  ---(intersec[2])---
+//                                           |
+//                                           |
+//                                           |
+//                                     (intersec[1])
+//                                           |
+//                                           |
+//
+// intersec := intersection
+// nbh := node_based_graph
 struct Intersection
 {
     static const constexpr std::size_t NO_INDEX = std::numeric_limits<std::size_t>::max();

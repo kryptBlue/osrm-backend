@@ -25,8 +25,7 @@ namespace extractor
 namespace guidance
 {
 
-// the shape of an intersection only knows about edge IDs and bearings
-// It a way of switching onto a segment, indicated by an EdgeID. The
+// the shape of an intersection only knows about edge IDs and bearings. The
 // associated turn is described by an angle and an instruction that is used to announce it.
 // The Turn Operation indicates what is exposed to the outside of the turn analysis.
 //
@@ -226,6 +225,27 @@ struct IntersectionView final : std::vector<IntersectionViewData>,      //
 // `Intersection` is a relative view of an intersection by an incoming edge.
 // `Intersection` are streets at an intersection ordered from from sharp right counter-clockwise to
 // sharp left where `intersection[0]` is _always_ a u-turn
+
+// An intersection is an ordered list of connected roads ordered from from sharp right
+// counter-clockwise to sharp left where `intersection[0]` is always a u-turn
+//
+//                                           |
+//                                           |
+//                                     (intersec[3])
+//                                           |
+//                                           |
+//                                           |
+//  nid ---(via_eid/intersec[0])--- nbg.GetTarget(via)  ---(intersec[2])---
+//                                           |
+//                                           |
+//                                           |
+//                                     (intersec[1])
+//                                           |
+//                                           |
+//
+// intersec := intersection
+// nbh := node_based_graph
+//
 struct Intersection final : std::vector<ConnectedRoad>,         //
                             EnableIntersectionOps<Intersection> //
 {

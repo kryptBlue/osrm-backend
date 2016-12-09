@@ -112,9 +112,7 @@ bool Intersection::hasValidEntries(Intersection::iterator first, Intersection::i
 {
     BOOST_ASSERT(last < end());
 
-    return all_of(first, last + 1, [&](const ConnectedRoad &road) {
-        return road.entry_allowed;
-    });
+    return all_of(first, last + 1, [&](const ConnectedRoad &road) { return road.entry_allowed; });
 }
 
 } // namespace guidance
