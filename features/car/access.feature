@@ -220,3 +220,10 @@ Feature: Car - Restricted access
         Then routability should be
             | highway | toll        | bothw |
             | primary | yes         |       |
+
+    Scenario: Car - Access combinations
+        Then routability should be
+            | highway     | accesss      | bothw |
+            | primary     | permissive   | x     |
+            | steps       | permissive   |       |
+            | garbagetag  | permissive   |       |
